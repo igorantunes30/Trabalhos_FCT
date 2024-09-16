@@ -1,0 +1,143 @@
+; Definições de registradores e constantes
+.equ F_CPU = 8000000    ; Frequência do clock
+.equ BAUD = 2400         ; Baud rate
+.equ MYUBRR = 207        ; Valor de UBRR para 2400 baud (calculado manualmente)
+.equ SPEED_FAST = 100     ; Velocidade rápida
+.equ SPEED_MEDIUM = 500   ; Velocidade média
+.equ SPEED_SLOW = 1000    ; Velocidade lenta
+
+; Segmento de dados
+.DSEG
+segment_map:
+    .byte 0b11000000, 0b11111001, 0b10100100, 0b10110000 ; 0, 1, 2, 3
+    .byte 0b10011001, 0b10010010, 0b10000010, 0b11111000 ; 4, 5, 6, 7
+    .byte 0b10000000, 0b10010000, 0b10001000, 0b10000011 ; 8, 9, A, B
+    .byte 0b11000110, 0b10100001, 0b10000110, 0b10001110 ; C, D, E, F
+
+counter:    .byte 1      ; Contador (0-15)
+direction:  .byte 1      ; Direção da contagem (1 = incremento, 0 = decremento)
+paused:     .byte 1      ; Estado pausado
+speed_delay: .word 500   ; Velocidade da contagem
+
+; Segmento de código
+.CSEG
+.org 0x0000
+rjmp main  ; Salta para o código principal
+
+; Inicializa UART
+uart_init:
+    ldi r16, high(MYUBRR)   ; Configura UBRR para baud rate 2400
+    sts UBRR0H, r16
+    ldi r16, low(MYUBRR)
+    sts UBRR0L, r16
+    ldi r16, (1<<RXEN0) | (1<<RXCIE0) ; Habilita recepção e interrupção
+    sts UCSR0B, r16
+    ldi r16, (1<<UCSZ01) | (1<<UCSZ00) ; Modo assíncrono, 8 bits
+    sts UCSR0C, r16
+    ret
+
+; Função para exibir o número no display de 7 segmentos
+display_number:
+    lds r18, counter
+    andi r18, 0x0F         ; Mantém o valor dentro de 0-15
+    ldi r31, high(segment_map)
+    ldi r30, low(segment_map)
+    add r30, r18           ; Carrega o valor mapeado
+    ld r16, Z
+    out PORTB, r16         ; Envia para o display de 7 segmentos
+    ret
+
+; ISR da recepção UART
+USART_RX_vect:
+    in r16, UDR0           ; Lê o dado recebido
+    cpi r16, 'A'
+    brne check_B_case
+    ldi r24, SPEED_FAST    ; Ajusta para contagem rápida
+    rjmp update_speed
+check_B_case:
+    cpi r16, 'B'
+    brne check_C_case
+    ldi r24, SPEED_MEDIUM  ; Ajusta para contagem média
+    rjmp update_speed
+check_C_case:
+    cpi r16, 'C'
+    brne invert_direction
+    ldi r24, SPEED_SLOW    ; Ajusta para contagem lenta
+    rjmp update_speed
+invert_direction:
+    lds r24, direction     ; Inverte a direção da contagem
+    eor r24, 0x01
+    sts direction, r24
+    reti
+update_speed:
+    sts speed_delay, r24    ; Atualiza o delay da contagem
+    reti
+
+; Inicialização de I/O
+init_io:
+    ldi r16, 0xFF          ; Configura PORTB como saída
+    out DDRB, r16
+    ldi r16, 0x00          ; Configura PD2 como entrada (botão)
+    out DDRD, r16
+    ldi r16, (1<<PD2)      ; Habilita pull-up no botão
+    out PORTD, r16
+    ret
+
+; Checa o estado do botão
+check_button:
+    in r16, PIND
+    sbrs r16, PD2          ; Se o botão for pressionado
+    rjmp toggle_pause
+    ret
+toggle_pause:
+    ldi r16, 50
+    call _delay_ms         ; Debounce
+    lds r16, paused        ; Alterna o estado de pausado
+    eor r16, 0x01
+    sts paused, r16
+    rjmp wait_button_release
+wait_button_release:
+    in r16, PIND
+    sbrc r16, PD2          ; Espera o botão ser solto
+    rjmp wait_button_release
+    ret
+
+; Função de delay personalizada
+delay_custom:
+    lds r16, speed_delay    ; Carrega o valor do delay
+delay_loop:
+    dec r16
+    brne delay_loop
+    ret
+
+; Programa principal
+main:
+    call uart_init          ; Inicializa UART
+    call init_io            ; Inicializa I/O
+    sei                    ; Habilita interrupções globais
+
+main_loop:
+    call check_button
+    lds r16, paused         ; Verifica se está pausado
+    cpi r16, 0
+    brne main_loop          ; Se pausado, continua no loop
+    call display_number     ; Exibe o número atual
+    lds r16, direction      ; Verifica a direção da contagem
+    cpi r16, 1
+    breq increment_counter
+    call decrement_counter
+    rjmp next_step
+increment_counter:
+    lds r16, counter        ; Incrementa o contador
+    inc r16
+    andi r16, 0x0F          ; Mantém entre 0-15
+    sts counter, r16
+    rjmp next_step
+decrement_counter:
+    lds r16, counter        ; Decrementa o contador
+    dec r16
+    andi r16, 0x0F          ; Mantém entre 0-15
+    sts counter, r16
+next_step:
+    call delay_custom       ; Aplica o delay personalizado
+    rjmp main_loop          ; Repete o loop principal
