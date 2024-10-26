@@ -24,6 +24,11 @@ import matplotlib.pyplot as plt
 
 df_aux = df[['t_sec','ANorm','GNorm']]
 df_aux = df_aux.iloc[:200]
+# Mostra um gráfico da norma euclidiana das amostras do Acelerômetro
+plt.title("ANorm x t_sec")
+plt.plot(df_aux["t_sec"], df_aux["ANorm"])
+
+plt.show()
 # Mostra um gráfico da norma euclidiana das amostras do Giroscópio
 plt.title("GNorm x t_sec")
 plt.plot(df_aux["t_sec"], df_aux["GNorm"])
@@ -311,8 +316,7 @@ df_win['Peak_G']=pg
 df_win['Cross_Mean_A']=cma
 df_win['Cross_Mean_G']=cmg
 df_win['Behavior']=b
-df_win[df_win['Behavior']!='<undefined>'] # Tratar coluna de behavior para não armazenar dois ou mais comportamentos iguais por medição
-fig, axs = plt.subplots(2, 3, figsize=(12,8))
+df_win[df_win['Behavior']!='<undefined>'] # Tratar coluna de behavior para não armazenar dois ou mais comportamentos iguais por mediçãofig, axs = plt.subplots(2, 3, figsize=(12,8))
 fig.suptitle('Histograma das Features')
 
 axs[0, 0].hist(df_win['Energy_A'], bins=30)
@@ -343,28 +347,74 @@ plt.ylim([0,7000])
 
 plt.tight_layout()
 plt.show()
-df_clf.replace ( 'Galope' , 1 ,  inplace =  True )
-df_clf.replace ( 'Em pé' , 2 ,  inplace =  True )
-df_clf.replace ( 'Andando' , 3 ,  inplace =  True )
-
-dog_ids = df_clf [ 'IDDoCão' ] .unique ()
+import pandas as pd
 from sklearn.tree import DecisionTreeClassifier
-from sklearn import metrics
+from sklearn.metrics import f1_score
+import matplotlib.pyplot as plt
+import numpy as np
 
-for id in dog_ids:
-    df_train = df_clf.loc[(df_clf['DogID'] != id)]
-    X_train = np.array(df_train[['Energy_A', 'Energy_G', 'Peak_A', 'Peak_G', 'Cross_Mean_A', 'Cross_Mean_G']])
-    y_train = np.array(df_train[['Behavior']])
-    df_test = df_clf.loc[(df_clf['DogID'] == id)]
-    X_test = np.array(df_test[['Energy_A', 'Energy_G', 'Peak_A', 'Peak_G', 'Cross_Mean_A', 'Cross_Mean_G']])
-    y_test = np.array(df_test[['Behavior']])
+
+df_clf['Behavior'] = df_clf['Behavior'].replace({'Galope': 1, 'Em pé': 2, 'Andando': 3})
+
+
+dog_ids = df_clf['DogID'].unique()
+
+
+model_performance = []
+
+for dog_id in dog_ids:
+    train_data = df_clf.loc[df_clf['DogID'] != dog_id]
+    X_train = np.array(train_data[['Energy_A', 'Energy_G', 'Peak_A', 'Peak_G', 'Cross_Mean_A', 'Cross_Mean_G']])
+    y_train = np.array(train_data['Behavior'])
+
+    test_data = df_clf.loc[df_clf['DogID'] == dog_id]
+    X_test = np.array(test_data[['Energy_A', 'Energy_G', 'Peak_A', 'Peak_G', 'Cross_Mean_A', 'Cross_Mean_G']])
+    y_test = np.array(test_data['Behavior'])
 
     clf = DecisionTreeClassifier(max_depth=5)
-    clf = clf.fit(X_train,y_train)
+    clf.fit(X_train, y_train.ravel())
+
+
     y_pred = clf.predict(X_test)
-    print("Acurácia:",metrics.accuracy_score(y_test, y_pred))
-!pip install graphviz
-!pip install pydotplus
+    f1 = f1_score(y_test, y_pred, average='weighted')
+
+    model_performance.append({
+        'DogID': dog_id,
+        'Model': clf,
+        'F1_Score': f1
+    })
+
+
+df_model_performance = pd.DataFrame(model_performance)#new dataframe
+
+#graficos
+plt.figure(figsize=(10, 6))
+plt.boxplot(df_model_performance['F1_Score'], vert=True, patch_artist=True)
+plt.title('Distribuição dos Escores F1 do Classificador por DogID')
+plt.ylabel('Escore F1')
+plt.xticks([1], ['Decision Tree'])
+plt.show()
+
+plt.figure(figsize=(10, 6))
+plt.hist(df_model_performance['F1_Score'], bins=10, edgecolor='black', alpha=0.7)
+plt.title('Histograma dos Escores F1')
+plt.xlabel('Escore F1')
+plt.ylabel('Frequência')
+plt.show()
+
+plt.figure(figsize=(12, 6))
+plt.bar(df_model_performance['DogID'], df_model_performance['F1_Score'], color='skyblue')
+plt.title('Desempenho do Classificador (Escore F1) por DogID')
+plt.xlabel('DogID')
+plt.ylabel('Escore F1')
+plt.xticks(rotation=45)
+plt.show()
+
+# Conclusão de desempenho
+mean_f1 = df_model_performance['F1_Score'].mean()
+std_f1 = df_model_performance['F1_Score'].std()
+print(f"Escore F1 médio: {mean_f1:.4f}")
+print(f"Desvio padrão do escore F1: {std_f1:.4f}")
 # Representação da árvore do último modelo gerado
 from sklearn.tree import export_graphviz
 from six import StringIO
@@ -377,4 +427,3 @@ export_graphviz(clf, out_file=dot_data, filled=True, rounded=True, special_chara
 graph = pydotplus.graph_from_dot_data(dot_data.getvalue())
 graph.write_png('behavior.png')
 Image(graph.create_png())
-
