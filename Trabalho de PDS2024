@@ -3,13 +3,10 @@ import gdown
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.signal import butter, ellip, filtfilt, tf2zpk, freqz
+from scipy.signal import butter, ellip, filtfilt
 from numpy.fft import fft, fftfreq
-from collections import Counter
 from sklearn.tree import DecisionTreeClassifier, export_graphviz
 from sklearn.metrics import f1_score
-from six import StringIO
-from IPython.display import Image
 import pydotplus
 
 # Baixar e carregar o arquivo do Google Drive
@@ -17,12 +14,41 @@ url = 'https://drive.google.com/uc?id=1BIvaGB8cq72hsSdldi7LiNsuv0A7FkPg'
 gdown.download(url, 'DogMoveData.csv', quiet=False)
 df = pd.read_csv('DogMoveData.csv')
 
+# Verificar se as colunas 'Behavior_1', 'Behavior_2', 'Behavior_3' estão presentes
+if all(col in df.columns for col in ['Behavior_1', 'Behavior_2', 'Behavior_3']):
+    # Combinar as colunas de comportamento em uma única coluna de comportamento consolidado
+    def consolidate_behavior(row):
+        behaviors = row[['Behavior_1', 'Behavior_2', 'Behavior_3']].dropna().unique()
+        if len(behaviors) > 0:
+            return behaviors[0]  # Pega o primeiro comportamento não nulo encontrado
+        return '<undefined>'
+
+    df['Behavior'] = df.apply(consolidate_behavior, axis=1)
+else:
+    raise ValueError("Colunas 'Behavior_1', 'Behavior_2' e 'Behavior_3' não foram encontradas no arquivo CSV.")
+
 # Calcular normas euclidianas do acelerômetro e giroscópio
 df['ANorm'] = np.linalg.norm(df[['ANeck_x', 'ANeck_y', 'ANeck_z']], axis=1)
 df['GNorm'] = np.linalg.norm(df[['GNeck_x', 'GNeck_y', 'GNeck_z']], axis=1)
 
-# Visualização de normas
+# Função para aplicação de filtros
+def apply_filter(data, filter_type='low', cutoff=10, fs=50, order=5):
+    b, a = (butter(order, cutoff / (0.5 * fs), btype=filter_type) 
+            if filter_type == 'low' else ellip(order, 0.1, 40, cutoff / (0.5 * fs), btype='high'))
+    return filtfilt(b, a, data)
+
+# Aplicar filtros aos sinais
+dog_ids = df['DogID'].unique()
+for dog_id in dog_ids:
+    subset = df[df['DogID'] == dog_id]
+    df.loc[subset.index, 'FilteredANorm'] = apply_filter(apply_filter(subset['ANorm'], 'high'), 'low')
+    df.loc[subset.index, 'FilteredGNorm'] = apply_filter(apply_filter(subset['GNorm'], 'high'), 'low')
+
+# Visualização das normas e sinais filtrados
 df_aux = df[['t_sec', 'ANorm', 'GNorm']].iloc[:200]
+df_filt = df[['t_sec', 'FilteredANorm', 'FilteredGNorm']].iloc[:200]
+
+# Salvar gráfico das normas
 plt.figure(figsize=(12, 5))
 plt.subplot(1, 2, 1)
 plt.title("ANorm x t_sec")
@@ -31,23 +57,10 @@ plt.subplot(1, 2, 2)
 plt.title("GNorm x t_sec")
 plt.plot(df_aux["t_sec"], df_aux["GNorm"])
 plt.tight_layout()
-plt.show()
+plt.savefig('norms_plot.png')  # Salvar como imagem
+plt.close()
 
-# Filtragem dos sinais
-def apply_filter(data, filter_type='low', cutoff=10, fs=50, order=5):
-    b, a = (butter(order, cutoff / (0.5 * fs), btype=filter_type) 
-            if filter_type == 'low' else ellip(order, 0.1, 40, cutoff / (0.5 * fs), btype='high'))
-    return filtfilt(b, a, data)
-
-# Aplicar filtros e criar novas colunas filtradas
-dog_ids = df['DogID'].unique()
-for dog_id in dog_ids:
-    subset = df[df['DogID'] == dog_id]
-    df.loc[subset.index, 'FilteredANorm'] = apply_filter(apply_filter(subset['ANorm'], 'high'), 'low')
-    df.loc[subset.index, 'FilteredGNorm'] = apply_filter(apply_filter(subset['GNorm'], 'high'), 'low')
-
-# Visualização dos dados filtrados
-df_filt = df[['t_sec', 'FilteredANorm', 'FilteredGNorm']].iloc[:200]
+# Salvar gráfico dos sinais filtrados
 fig, axs = plt.subplots(2, 2, figsize=(11, 7))
 fig.suptitle('Comparação antes e após filtros')
 axs[0, 0].plot(df_aux['t_sec'], df_aux['ANorm'], 'tab:blue')
@@ -59,14 +72,15 @@ axs[1, 0].set_title("GNorm x t_sec")
 axs[1, 1].plot(df_filt['t_sec'], df_filt['FilteredGNorm'], 'tab:green')
 axs[1, 1].set_title("GNorm (filtrada) x t_sec")
 plt.tight_layout()
-plt.show()
+plt.savefig('filtered_signals.png')  # Salvar como imagem
+plt.close()
 
 # Funções para extração de características
 def energy(sig): return np.sum(sig ** 2) * 0.01
 def peak(sig): return fftfreq(len(sig))[np.argmax(np.abs(fft(sig)))]
 def cross_mean(sig): return np.sum(np.diff(np.sign(sig - np.mean(sig))) != 0)
 
-# Janelação e extração de características
+# Função de janelação
 def windowing(data, window_size=200, overlap=0.5, window_type='hann'):
     step = int(window_size * (1 - overlap))
     window = np.hanning(window_size) if window_type == 'hann' else np.ones(window_size)
@@ -74,7 +88,7 @@ def windowing(data, window_size=200, overlap=0.5, window_type='hann'):
 
 # Processamento dos dados por janela
 window_size = 200
-id, ea, eg, pa, pg, cma, cmg, b = [], [], [], [], [], [], [], []
+id, ea, eg, pa, pg, cma, cmg = [], [], [], [], [], [], []
 for dog_id in dog_ids:
     dog = df[df['DogID'] == dog_id]
     a_win = windowing(dog['FilteredANorm'].values, window_size)
@@ -89,48 +103,59 @@ for dog_id in dog_ids:
         cma.append(cross_mean(sig_w_a))
         cmg.append(cross_mean(sig_w_g))
 
-df_win = pd.DataFrame({
-    'DogID': id, 'Energy_A': ea, 'Energy_G': eg, 
-    'Peak_A': pa, 'Peak_G': pg, 'Cross_Mean_A': cma, 'Cross_Mean_G': cmg
+# Criar DataFrame consolidado
+df_consolidated = pd.DataFrame({
+    'DogID': id,
+    'Energy_A': ea,
+    'Energy_G': eg,
+    'Peak_A': pa,
+    'Peak_G': pg,
+    'Cross_Mean_A': cma,
+    'Cross_Mean_G': cmg
 })
 
-# Criar novo DataFrame consolidado
-df_consolidated = pd.DataFrame({
-    'DogID': id, 
-    'ANorm': df['ANorm'], 
-    'GNorm': df['GNorm'], 
-    'FilteredANorm': df['FilteredANorm'], 
-    'FilteredGNorm': df['FilteredGNorm'], 
-    'Energy_A': ea, 
-    'Energy_G': eg, 
-    'Peak_A': pa, 
-    'Peak_G': pg, 
-    'Cross_Mean_A': cma, 
-    'Cross_Mean_G': cmg,
-    'Model': [None] * len(id), 
-    'F1_Score': [None] * len(id)
-})
+# Adicionar colunas de normas calculadas e sinais filtrados
+df_consolidated['ANorm'] = df['ANorm'].iloc[:len(df_consolidated)].values
+df_consolidated['GNorm'] = df['GNorm'].iloc[:len(df_consolidated)].values
+df_consolidated['FilteredANorm'] = df['FilteredANorm'].iloc[:len(df_consolidated)].values
+df_consolidated['FilteredGNorm'] = df['FilteredGNorm'].iloc[:len(df_consolidated)].values
+
+# Adicionar comportamento consolidado ao DataFrame
+df_consolidated['Behavior'] = df['Behavior'].iloc[:len(df_consolidated)].replace({'Galloping': 1, 'Standing': 2, 'Walking': 3})
 
 # Classificação usando Decision Tree
-df_clf = df_win[df['Behavior'] != '<undefined>']
-X = df_clf[['Energy_A', 'Energy_G', 'Peak_A', 'Peak_G', 'Cross_Mean_A', 'Cross_Mean_G']]
-y = df_clf['Behavior'].replace({'Galloping': 1, 'Standing': 2, 'Walking': 3})
+X = df_consolidated[['Energy_A', 'Energy_G', 'Peak_A', 'Peak_G', 'Cross_Mean_A', 'Cross_Mean_G']]
+y = df_consolidated['Behavior']
 
+# Treinamento do modelo
 clf = DecisionTreeClassifier(max_depth=5)
 clf.fit(X, y)
 f1 = f1_score(y, clf.predict(X), average='weighted')
-df_consolidated['Model'] = clf
-df_consolidated['F1_Score'] = f1
 
-print(f"Escore F1 médio: {f1:.4f}")
+# Adicionar escore F1 ao DataFrame consolidado
+df_consolidated['F1_Score'] = [f1] * len(df_consolidated)
 
-# Visualização da árvore de decisão
+# Salvar resultados em arquivo CSV
+df_consolidated.to_csv('df_consolidated.csv', index=False)
+
+# Exportar a árvore de decisão para um arquivo DOT
 dot_data = StringIO()
 export_graphviz(clf, out_file=dot_data, filled=True, rounded=True, special_characters=True,
                 feature_names=X.columns, class_names=['1', '2', '3'])
 graph = pydotplus.graph_from_dot_data(dot_data.getvalue())
-graph.write_png('behavior.png')
-Image(graph.create_png())
 
-# Exibir DataFrame consolidado
+# Salvar a árvore de decisão como imagem PNG
+graph.write_png('behavior_tree.png')
+
+# Salvar histograma do escore F1
+plt.figure(figsize=(10, 6))
+plt.hist(df_consolidated['F1_Score'], bins=10, edgecolor='black', alpha=0.7)
+plt.title('Histograma dos Escores F1')
+plt.xlabel('Escore F1')
+plt.ylabel('Frequência')
+plt.savefig('f1_score_histogram.png')  # Salvar como imagem
+plt.close()
+
+# Exibir as informações principais no console
+print("Escore F1 médio: {:.4f}".format(f1))
 print(df_consolidated.head())
