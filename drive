@@ -1,0 +1,24 @@
+# Instalar o pydrive (caso ainda não esteja instalado)
+!pip install pydrive
+
+# Importar pacotes necessários
+from pydrive.auth import GoogleAuth
+from pydrive.drive import GoogleDrive
+
+# Autenticação no Google Drive
+gauth = GoogleAuth()
+gauth.LocalWebserverAuth()  # Isso abrirá uma janela do navegador para login e autorização
+
+drive = GoogleDrive(gauth)
+
+# Função para upload de arquivo
+def upload_to_drive(filepath, filename):
+    file = drive.CreateFile({'title': filename})
+    file.SetContentFile(filepath)
+    file.Upload()
+    print(f"Arquivo {filename} enviado para o Google Drive.")
+
+# Exemplo de upload dos arquivos
+upload_to_drive('df_consolidated.csv', 'df_consolidated.csv')
+upload_to_drive('filtered_signals.png', 'filtered_signals.png')
+upload_to_drive('norms_plot.png', 'norms_plot.png')
