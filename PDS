@@ -1,0 +1,123 @@
+import gdown
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.signal import butter, ellip, filtfilt, freqz
+from numpy.fft import fft, fftfreq
+from collections import Counter
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+import pydotplus
+from sklearn.tree import export_graphviz
+from IPython.display import Image
+
+# Baixar e carregar dados
+file_url = 'https://drive.google.com/uc?id=1BIvaGB8cq72hsSdldi7LiNsuv0A7FkPg'
+gdown.download(file_url, output='DogMoveData.csv', quiet=False)
+df = pd.read_csv('DogMoveData.csv')
+
+# Calcular normas euclidianas
+df['ANorm'] = np.sqrt(df['ANeck_x']**2 + df['ANeck_y']**2 + df['ANeck_z']**2)
+df['GNorm'] = np.sqrt(df['GNeck_x']**2 + df['GNeck_y']**2 + df['GNeck_z']**2)
+
+# Normalizar os dados
+df['ANorm'] = df['ANorm'] / df['ANorm'].abs().max()
+df['GNorm'] = df['GNorm'] / df['GNorm'].abs().max()
+
+# Funções de filtros
+def filtro_passa_baixas(dados, fc=10, fs=100, ordem=5):
+    b, a = butter(ordem, fc / (0.5 * fs), btype='lowpass')
+    return filtfilt(b, a, dados)
+
+def filtro_passa_altas(dados, fc=0.5, fs=100, ordem=5):
+    b, a = ellip(ordem, 0.1, 40, fc / (0.5 * fs), btype='highpass')
+    return filtfilt(b, a, dados)
+
+# Aplicar filtros aos dados normalizados
+df['ANormFiltrado'] = filtro_passa_baixas(filtro_passa_altas(df['ANorm']))
+df['GNormFiltrado'] = filtro_passa_baixas(filtro_passa_altas(df['GNorm']))
+
+# Gráficos de normas
+plt.figure(figsize=(10, 4))
+plt.plot(df['t_sec'][:200], df['ANorm'][:200], label='ANorm Normalizado')
+plt.plot(df['t_sec'][:200], df['GNorm'][:200], label='GNorm Normalizado')
+plt.title('ANorm e GNorm Normalizados x Tempo')
+plt.legend()
+plt.show()
+
+# Funções para janelamento e características
+def calcular_energia(sinal):
+    return np.sum(sinal ** 2)
+
+def frequencia_pico(sinal):
+    magnitudes = np.abs(fft(sinal))
+    frequencias = fftfreq(len(magnitudes))
+    return frequencias[np.argmax(magnitudes)]
+
+def contar_cruzamentos_media(sinal):
+    media = np.mean(sinal)
+    return ((sinal[:-1] > media) != (sinal[1:] > media)).sum()
+
+# Extrair características por janela
+def extrair_caracteristicas(df, janela=200, sobreposicao=0.5):
+    resultados = []
+    for id_cao in df['DogID'].unique():
+        dados_cao = df[df['DogID'] == id_cao]
+        for inicio in range(0, len(dados_cao) - janela + 1, int(janela * (1 - sobreposicao))):
+            sub_a = dados_cao['ANormFiltrado'].values[inicio:inicio+janela]
+            sub_g = dados_cao['GNormFiltrado'].values[inicio:inicio+janela]
+            resultados.append({
+                'DogID': id_cao,
+                'Energy_A': calcular_energia(sub_a),
+                'Energy_G': calcular_energia(sub_g),
+                'Peak_A': frequencia_pico(sub_a),
+                'Peak_G': frequencia_pico(sub_g),
+                'Cross_Mean_A': contar_cruzamentos_media(sub_a),
+                'Cross_Mean_G': contar_cruzamentos_media(sub_g),
+                'Behavior': dados_cao['Behavior_1'].mode()[0]  # Predominante
+            })
+    return pd.DataFrame(resultados)
+
+# DataFrame com características extraídas
+df_win = extrair_caracteristicas(df)
+
+# Histograma das características
+fig, axes = plt.subplots(2, 3, figsize=(12, 8))
+df_win['Energy_A'].plot.hist(bins=30, ax=axes[0, 0], title='Energia Acelerômetro')
+df_win['Peak_A'].plot.hist(bins=30, ax=axes[0, 1], title='Pico Frequência Acelerômetro')
+df_win['Cross_Mean_A'].plot.hist(bins=30, ax=axes[0, 2], title='Cruzamentos Acelerômetro')
+df_win['Energy_G'].plot.hist(bins=30, ax=axes[1, 0], title='Energia Giroscópio')
+df_win['Peak_G'].plot.hist(bins=30, ax=axes[1, 1], title='Pico Frequência Giroscópio')
+df_win['Cross_Mean_G'].plot.hist(bins=30, ax=axes[1, 2], title='Cruzamentos Giroscópio')
+plt.tight_layout()
+plt.show()
+
+# Classificação com Leave-One-Dog-Out
+desempenho_modelo = []
+dog_ids = df_win['DogID'].unique()
+for id_cao in dog_ids:
+    treino = df_win[df_win['DogID'] != id_cao]
+    teste = df_win[df_win['DogID'] == id_cao]
+    X_treino, y_treino = treino.iloc[:, 1:-1], treino['Behavior']
+    X_teste, y_teste = teste.iloc[:, 1:-1], teste['Behavior']
+    
+    classificador = DecisionTreeClassifier(max_depth=5)
+    classificador.fit(X_treino, y_treino)
+    y_pred = classificador.predict(X_teste)
+    
+    desempenho_modelo.append({
+        'DogID': id_cao,
+        'Accuracy': accuracy_score(y_teste, y_pred),
+        'Precision': precision_score(y_teste, y_pred, average='weighted'),
+        'Recall': recall_score(y_teste, y_pred, average='weighted'),
+        'F1': f1_score(y_teste, y_pred, average='weighted')
+    })
+
+# Resultados agregados
+df_resultados = pd.DataFrame(desempenho_modelo)
+print(df_resultados[['Accuracy', 'Precision', 'Recall', 'F1']].mean())
+
+# Visualização da árvore de decisão final
+dot_data = export_graphviz(classificador, feature_names=df_win.columns[1:-1], class_names=['Galloping', 'Standing', 'Walking'], filled=True)
+grafico = pydotplus.graph_from_dot_data(dot_data)
+Image(grafico.create_png())
