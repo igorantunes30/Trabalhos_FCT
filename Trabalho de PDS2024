@@ -1,75 +1,310 @@
-# Importar pacotes necessários
+# Pacote para instalar
+!pip install gdown
+
+# Importar pacotes
+import gdown
 import pandas as pd
+
+# Importar arquivo do Google Drive
+url = f'https://drive.google.com/uc?id=1BIvaGB8cq72hsSdldi7LiNsuv0A7FkPg'
+gdown.download(url, 'DogMoveData.csv', quiet=False)
+# Transformar em dataframe e visualizar
+df = pd.read_csv('DogMoveData.csv')
+df
+#Gerar duas colunas referentes às normas euclidianas do acelerômetro e do giroscópio, respectivamente
 import numpy as np
-from scipy.signal import butter, ellip, filtfilt
-from numpy.fft import fft, fftfreq
-from sklearn.tree import DecisionTreeClassifier, export_graphviz
-from sklearn.metrics import f1_score
-import pydotplus
 
-# Carregar o arquivo localmente
-file_path = 'DogMoveData.csv'  # Caminho para o arquivo já baixado
-
-# Ler o arquivo CSV
-df = pd.read_csv(file_path)
-
-# Verificar se as colunas 'Behavior_1', 'Behavior_2', 'Behavior_3' estão presentes
-if all(col in df.columns for col in ['Behavior_1', 'Behavior_2', 'Behavior_3']):
-    # Combinar as colunas de comportamento em uma única coluna de comportamento consolidado
-    def consolidate_behavior(row):
-        behaviors = row[['Behavior_1', 'Behavior_2', 'Behavior_3']].dropna().unique()
-        if len(behaviors) > 0:
-            return behaviors[0]  # Pega o primeiro comportamento não nulo encontrado
-        return '<undefined>'
-
-    df['Behavior'] = df.apply(consolidate_behavior, axis=1)
-else:
-    raise ValueError("Colunas 'Behavior_1', 'Behavior_2' e 'Behavior_3' não foram encontradas no arquivo CSV.")
-
-# Filtrar apenas comportamentos válidos
-df = df[df['Behavior'].isin(['Galloping', 'Standing', 'Walking'])]
-
-# Converter a coluna 'Behavior' para valores numéricos
-behavior_mapping = {'Galloping': 1, 'Standing': 2, 'Walking': 3}
-df['Behavior'] = df['Behavior'].map(behavior_mapping)
-
-# Calcular normas euclidianas do acelerômetro e giroscópio
 df['ANorm'] = np.linalg.norm(df[['ANeck_x', 'ANeck_y', 'ANeck_z']], axis=1)
 df['GNorm'] = np.linalg.norm(df[['GNeck_x', 'GNeck_y', 'GNeck_z']], axis=1)
+df
+# Visualização de informações acerca das normas
+# Importando a biblioteca de gráficos e preparando o dataframe auxiliar
 
-# Função para aplicação de filtros
-def apply_filter(data, filter_type='low', cutoff=10, fs=50, order=5):
-    b, a = (butter(order, cutoff / (0.5 * fs), btype=filter_type) 
-            if filter_type == 'low' else ellip(order, 0.1, 40, cutoff / (0.5 * fs), btype='high'))
-    return filtfilt(b, a, data)
+import matplotlib.pyplot as plt
 
-# Aplicar filtros aos sinais
+df_aux = df[['t_sec','ANorm','GNorm']]
+df_aux = df_aux.iloc[:200]
+# Mostra um gráfico da norma euclidiana das amostras do Acelerômetro
+plt.title("ANorm x t_sec")
+plt.plot(df_aux["t_sec"], df_aux["ANorm"])
+
+plt.show()
+# Mostra um gráfico da norma euclidiana das amostras do Giroscópio
+plt.title("GNorm x t_sec")
+plt.plot(df_aux["t_sec"], df_aux["GNorm"])
+plt.show()
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.signal import butter, ellip, freqz
+
+# Função que plota os gabaritos dos filtros
+def plot_filter_response(filter_type, cutoff, fs, order=5, transition_width=0.01):
+    # Filtros
+    if filter_type == 'ellip':
+        b, a = ellip(order, 0.1, 40, cutoff/(0.5*fs), btype='highpass', analog=False, output='ba')
+        label = 'Elíptico'
+    elif filter_type == 'butter':
+        b, a = butter(order, cutoff/(0.5*fs), btype='lowpass', analog=False, output='ba')
+        label = 'Butterworth'
+
+    w, h = freqz(b, a, worN=8000)
+    frequencies = (fs * 0.5 / np.pi) * w
+    magnitudes = abs(h)
+
+    # Plotando a resposta em frequência
+    plt.figure(figsize=(10, 6))
+    plt.plot(frequencies, magnitudes, label=f'Filtro {label}', color='blue')
+
+    # Linhas de referência
+    plt.axvline(x=cutoff, color='red', linestyle='--', label='Frequência de corte (fc)')
+
+    # Preenchendo áreas
+    if filter_type == 'butter':
+
+      plt.fill_betweenx([0, 1], 0, cutoff, color='lightgreen', alpha=0.3, label='Banda Passante')
+      transition_start = cutoff - transition_width / 2
+      transition_end = cutoff + transition_width / 2
+      plt.fill_betweenx([0, 1], transition_start, transition_end, color='yellow', alpha=0.3, label='Banda de Transição')
+      plt.fill_betweenx([0, 1], transition_end, fs, color='red', alpha=0.2, label='Banda de Rejeição')
+
+    elif filter_type == 'ellip':
+
+      plt.fill_betweenx([0, 1], 0, cutoff, color='red', alpha=0.3, label='Banda de Rejeição')
+      transition_start = cutoff - transition_width / 2
+      transition_end = cutoff + transition_width / 2
+      plt.fill_betweenx([0, 1], transition_start, transition_end, color='yellow', alpha=0.3, label='Banda de Transição')
+      plt.fill_betweenx([0, 1], transition_end, fs, color='lightgreen', alpha=0.2, label='Banda Passante')
+
+    # Configurações do gráfico
+    plt.title(f'Resposta em Frequência do Filtro {label}')
+    plt.xlabel('Frequência (Hz)')
+    plt.ylabel('Magnitude')
+    plt.grid(True)
+    plt.legend()
+    plt.ylim(0, 1.1)
+    if filter_type == 'butter':
+        plt.xlim(0, 20)
+    elif filter_type == 'ellip':
+        plt.xlim(0, 1)
+    plt.show()
+
+# Chamadas para plotar os filtros
+plot_filter_response(filter_type='butter', cutoff=10, fs=100, transition_width=2)
+plot_filter_response(filter_type='ellip', cutoff=0.5, fs=100, transition_width=0.2)
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.signal import butter, ellip, freqz, tf2zpk, filtfilt
+
+# Função de filtro passa-altas Elíptico
+def highpass_filter(data=None, cutoff=0.5, fs=100, order=5):
+    b, a = ellip(order, 0.1, 40, cutoff/(0.5*fs), btype='highpass', analog=False, output='ba')
+    if data is not None and data.size > 0:
+        y = filtfilt(b, a, data)
+        return y
+    else:
+        return (b, a)
+
+# Função de filtro passa-baixas Butterworth
+def lowpass_filter(data=None, cutoff=10, fs=100, order=5):
+    b, a = butter(order, cutoff/(0.5*fs), btype='lowpass', analog=False, output='ba')
+    if data is not None and data.size > 0:
+        y = filtfilt(b, a, data)
+        return y
+    else:
+        return (b, a)
+
+def plot_poles_zeros(label, a, b):
+    # Converte os coeficientes do filtro para polos, zeros e ganho
+    z, p, k = tf2zpk(b, a)
+
+    print(p, z)
+
+    plt.figure(figsize=(8, 8))
+
+    # Plotando polos
+    plt.scatter(np.real(p), np.imag(p), marker='x', color='red', label='Polos')
+
+    # Plotando zeros
+    plt.scatter(np.real(z), np.imag(z), marker='o', color='blue', label='Zeros')
+
+    # Desenhando a circunferência de raio unitário
+    circle = plt.Circle((0, 0), 1, color='gray', fill=False, linestyle='--', label='Circunferência de Raio Unitário')
+    plt.gca().add_artist(circle)
+
+    # Configurações do gráfico
+    plt.axhline(0, color='gray', lw=0.5)
+    plt.axvline(0, color='gray', lw=0.5)
+    plt.xlim(-1.5, 1.5)
+    plt.ylim(-1.5, 1.5)
+    plt.title(f'Diagrama de Polos e Zeros - Filtro {label}')
+    plt.xlabel('Parte Real')
+    plt.ylabel('Parte Imaginária')
+    plt.grid()
+    plt.legend()
+    plt.gca().set_aspect('equal', adjustable='box')  # Para manter a proporção
+    plt.show()
+# Criar um filtro passa-altas
+b_high, a_high = highpass_filter(cutoff=0.5, fs=100)
+
+# Criar um filtro passa-baixas
+b_low, a_low = lowpass_filter(cutoff=10, fs=100)
+
+# Plotar polos e zeros
+plot_poles_zeros('Passa-altas Elíptico', a_high, b_high)
+plot_poles_zeros('Passa-baixas Butterworth', a_low, b_low)
 dog_ids = df['DogID'].unique()
 for dog_id in dog_ids:
     subset = df[df['DogID'] == dog_id]
-    df.loc[subset.index, 'FilteredANorm'] = apply_filter(apply_filter(subset['ANorm'], 'high'), 'low')
-    df.loc[subset.index, 'FilteredGNorm'] = apply_filter(apply_filter(subset['GNorm'], 'high'), 'low')
 
-# Funções para extração de características
-def energy(sig): return np.sum(sig ** 2) * 0.01
-def peak(sig): return fftfreq(len(sig))[np.argmax(np.abs(fft(sig)))]
-def cross_mean(sig): return np.sum(np.diff(np.sign(sig - np.mean(sig))) != 0)
+    if not subset['ANorm'].empty:
+        filtered_a_norm = lowpass_filter(highpass_filter(subset['ANorm'].values))
+    if not subset['GNorm'].empty:
+        filtered_g_norm = lowpass_filter(highpass_filter(subset['GNorm'].values))
 
-# Função de janelação
-def windowing(data, window_size=200, overlap=0.5, window_type='hann'):
+    df.loc[subset.index, 'FilteredANorm'] = filtered_a_norm
+    df.loc[subset.index, 'FilteredGNorm'] = filtered_g_norm
+
+
+df[['FilteredANorm', 'FilteredGNorm']].head(100)
+# Visualização do efeito dos filtros
+
+df_filt = df[['t_sec','FilteredANorm','FilteredGNorm']]
+df_filt = df_filt.iloc[:200]
+#df_filt
+fig, axs = plt.subplots(2, 2, figsize=(11,7))
+fig.suptitle('Comparação antes (em azul) e após filtros (em verde)')
+
+axs[0, 0].plot(df_aux['t_sec'], df_aux['ANorm'], 'tab:blue')
+axs[0, 0].set_title("ANorm x t_sec")
+
+axs[0, 1].plot(df_filt['t_sec'], df_filt['FilteredANorm'], 'tab:green')
+axs[0, 1].set_title("ANorm (filtrada) x t_sec")
+
+axs[1, 0].plot(df_aux['t_sec'], df_aux['GNorm'], 'tab:blue')
+axs[1, 0].set_title("GNorm x t_sec")
+
+axs[1, 1].plot(df_filt['t_sec'], df_filt['FilteredGNorm'], 'tab:green')
+axs[1, 1].set_title("GNorm (filtrada) x t_sec")
+
+from numpy.fft import fft, fftfreq
+import matplotlib.pyplot as plt
+
+# Apenas a parte positiva da FFT (frequências e magnitudes)
+freqs = fftfreq(len(df_filt['FilteredANorm']))
+freqs = freqs[:len(freqs)//2]
+values = df_filt['FilteredANorm']
+values = values[:len(values)//2]
+
+# Plotando o sinal original e sua transformada
+plt.figure(figsize=(12, 6))
+
+plt.subplot(2, 1, 2)
+plt.stem(freqs, values)
+plt.title('Anorm x freq')
+plt.xlabel('Frequência (Hz)')
+plt.ylabel('FilteredAnorm')
+
+plt.tight_layout()
+plt.show()
+# Apenas a parte positiva da FFT (frequências e magnitudes)
+freqs = fftfreq(len(df_filt['FilteredGNorm']))
+freqs = freqs[:len(freqs)//2]
+values = df_filt['FilteredGNorm']
+values = values[:len(values)//2]
+
+# Plotando o sinal original e sua transformada
+plt.figure(figsize=(12, 6))
+
+plt.subplot(2, 1, 2)
+plt.stem(freqs, values)
+plt.title('Gnorm x freq')
+plt.xlabel('Frequência (Hz)')
+plt.ylabel('FilteredGnorm')
+
+plt.tight_layout()
+plt.show()
+def windowing(data, window_type, window_size, overlap=0.5):
     step = int(window_size * (1 - overlap))
-    window = np.hanning(window_size) if window_type == 'hann' else np.ones(window_size)
-    return [data[i:i + window_size] * window for i in range(0, len(data) - window_size + 1, step)]
+    if window_type == 'hann':
+      hann_window = np.hanning(window_size)
+    else:
+      hann_window = None
+    for i in range(0, len(data) - window_size + 1, step):
+      if hann_window is not None:
+        yield data[i:i + window_size] * hann_window
+      else:
+        yield data[i:i + window_size]
+from collections import Counter
 
-# Processamento dos dados por janela
+# Energia
+def energy(sig):
+  return np.sum(sig ** 2)
+
+# Frequência de pico
+def peak(sig):
+  # Para função
+  sig_fourier = np.fft.fft(sig) # sig é a janela a ser transformada
+  sig_abs = np.abs(sig_fourier)
+
+  peak = np.argmax(sig_abs)  # retorna indice
+
+  frequencies = fftfreq(len(sig_abs)) # criando vetor das frequências
+  peak_F = frequencies[peak]
+
+  return peak_F
+
+# Número de cruzamentos pela média
+def cross_mean(sig):
+    mean = np.mean(sig)
+    cross = 0
+    above = None
+
+    for num in sig:
+        if above is None:
+            above = num > mean
+
+        if num > mean:
+            if not above: # Cruzou para cima se o anterior for para baixo
+                cross += 1
+                above = True
+        elif num < mean:
+            if above:  # Cruzou para baixo se o anterior for para cima
+                cross += 1
+                above = False
+
+    return cross
+
+# Comportamento predominante
+def behavior(sig):
+    counts = Counter(sig)
+    total = len(sig)
+
+    # Verificar se algum comportamento predominou com 75% ou mais
+    for behavior, num in counts.items():
+        if num/total >= 0.75:
+            return behavior
+    return '<undefined>'
 window_size = 200
-id, ea, eg, pa, pg, cma, cmg = [], [], [], [], [], [], []
+overlap = 0.5
+id = []
+ea=[]
+eg=[]
+pa=[]
+pg=[]
+cma=[]
+cmg=[]
+b=[]
+
+# Janelamento por cachorro armazenando os dados das janelas em listas
 for dog_id in dog_ids:
     dog = df[df['DogID'] == dog_id]
-    a_win = windowing(dog['FilteredANorm'].values, window_size)
-    g_win = windowing(dog['FilteredGNorm'].values, window_size)
+    a_win = list(windowing(dog['FilteredANorm'].values, 'hann', window_size=window_size, overlap=overlap))
+    g_win = list(windowing(dog['FilteredGNorm'].values, 'hann', window_size=window_size, overlap=overlap))
+    b1_win = list(windowing(dog['Behavior_1'].values, 'rect', window_size=window_size, overlap=overlap))
+    b2_win = list(windowing(dog['Behavior_2'].values, 'rect', window_size=window_size, overlap=overlap))
+    b3_win = list(windowing(dog['Behavior_3'].values, 'rect', window_size=window_size, overlap=overlap))
 
-    for sig_w_a, sig_w_g in zip(a_win, g_win):
+    for sig_w_a,sig_w_g,sig_w_b1,sig_w_b2,sig_w_b3 in zip(a_win,g_win,b1_win,b2_win,b3_win):
         id.append(dog_id)
         ea.append(energy(sig_w_a))
         eg.append(energy(sig_w_g))
@@ -78,48 +313,136 @@ for dog_id in dog_ids:
         cma.append(cross_mean(sig_w_a))
         cmg.append(cross_mean(sig_w_g))
 
-# Criar DataFrame consolidado
-df_consolidated = pd.DataFrame({
-    'DogID': id,
-    'Energy_A': ea,
-    'Energy_G': eg,
-    'Peak_A': pa,
-    'Peak_G': pg,
-    'Cross_Mean_A': cma,
-    'Cross_Mean_G': cmg
-})
+        sig_w_b = np.array([])
+        for b1, b2, b3 in zip(sig_w_b1, sig_w_b2, sig_w_b3):
+            unique = []
+            for bn in (b1,b2,b3):
+                if bn != '<undefined>':
+                    unique.append(bn)
+            if not unique:
+                unique.append('<undefined>')
+            sig_w_b = np.concatenate((sig_w_b,np.array(unique)), axis=0)
+        b.append(behavior(np.array(sig_w_b)))
+df_win = pd.DataFrame(columns = ['DogID', 'Energy_A', 'Energy_G', 'Peak_A', 'Peak_G', 'Cross_Mean_A', 'Cross_Mean_G', 'Behavior'])
 
-# Converter todas as colunas de entrada para float
-df_consolidated = df_consolidated.astype(float)
+df_win['DogID']=id
+df_win['Energy_A']=ea
+df_win['Energy_G']=eg
+df_win['Peak_A']=pa
+df_win['Peak_G']=pg
+df_win['Cross_Mean_A']=cma
+df_win['Cross_Mean_G']=cmg
+df_win['Behavior']=b
+fig, axs = plt.subplots(2, 3, figsize=(12,8))
+fig.suptitle('Histograma das Features')
 
-# Adicionar colunas de normas calculadas e sinais filtrados
-df_consolidated['ANorm'] = df['ANorm'].iloc[:len(df_consolidated)].values
-df_consolidated['GNorm'] = df['GNorm'].iloc[:len(df_consolidated)].values
-df_consolidated['FilteredANorm'] = df['FilteredANorm'].iloc[:len(df_consolidated)].values
-df_consolidated['FilteredGNorm'] = df['FilteredGNorm'].iloc[:len(df_consolidated)].values
+axs[0, 0].hist(df_win['Energy_A'], bins=30)
+axs[0, 0].set_title("Enegia do Acelerômetro")
 
-# Adicionar comportamento consolidado ao DataFrame
-df_consolidated['Behavior'] = df['Behavior'].iloc[:len(df_consolidated)].values
+axs[0, 1].hist(df_win['Peak_A'], bins=30)
+axs[0, 1].set_title("Pico de frequência")
 
-# Classificação usando Decision Tree
-X = df_consolidated[['Energy_A', 'Energy_G', 'Peak_A', 'Peak_G', 'Cross_Mean_A', 'Cross_Mean_G']]
-y = df_consolidated['Behavior']
+axs[0, 2].hist(df_win['Cross_Mean_A'], bins = 30)
+axs[0, 2].set_title("Cruzamentos da média")
 
-# Garantir que X e y sejam numéricos
-X = X.astype(float)
-y = y.astype(int)
 
-# Treinamento do modelo
-clf = DecisionTreeClassifier(max_depth=5)
-clf.fit(X, y)
-f1 = f1_score(y, clf.predict(X), average='weighted')
+axs[1, 0].hist(df_win['Energy_G'], bins=30)
+axs[1, 0].set_title("Enegia do Giroscópio")
 
-# Adicionar escore F1 ao DataFrame consolidado
-df_consolidated['F1_Score'] = [f1] * len(df_consolidated)
+axs[1, 1].hist(df_win['Peak_G'], bins=30)
+axs[1, 1].set_title("Pico de frequência")
 
-# Salvar resultados em arquivo CSV
-df_consolidated.to_csv('df_consolidated.csv', index=False)
+axs[1, 2].hist(df_win['Cross_Mean_G'], bins = 30)
+axs[1, 2].set_title("Cruzamentos da média")
+df_clf = df_win.loc[(df_win['Behavior'] == 'Galloping') | (df_win['Behavior'] == 'Standing') | (df_win['Behavior'] == 'Walking')]
+df_clf
+plt.subplot(2, 1, 2)
+values, bins, bars = plt.hist(df_clf['Behavior'], orientation='vertical', bins=3)
+plt.title('Histograma Behavior')
+plt.bar_label(bars)
+plt.ylim([0,7000])
 
-# Exibir as informações principais no console
-print("Escore F1 médio: {:.4f}".format(f1))
-print(df_consolidated.head())
+plt.tight_layout()
+plt.show()
+df_clf.replace({'Galloping': 1, 'Standing': 2, 'Walking': 3}, inplace = True)
+
+dog_ids = df_clf['DogID'].unique()
+import pandas as pd
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.metrics import f1_score, accuracy_score, confusion_matrix, precision_score, recall_score
+import matplotlib.pyplot as plt
+import numpy as np
+
+model_performance = []
+
+for dog_id in dog_ids:
+    df_train = df_clf.loc[(df_clf['DogID'] != dog_id)]
+    X_train = np.array(df_train[['Energy_A', 'Energy_G', 'Peak_A', 'Peak_G', 'Cross_Mean_A', 'Cross_Mean_G']])
+    y_train = np.array(df_train[['Behavior']])
+
+    df_test = df_clf.loc[(df_clf['DogID'] == dog_id)]
+    X_test = np.array(df_test[['Energy_A', 'Energy_G', 'Peak_A', 'Peak_G', 'Cross_Mean_A', 'Cross_Mean_G']])
+    y_test = np.array(df_test[['Behavior']])
+
+    clf = DecisionTreeClassifier(max_depth=5)
+    clf.fit(X_train, y_train)
+
+    y_pred = clf.predict(X_test)
+    ac = accuracy_score(y_test, y_pred)
+    cm = confusion_matrix(y_test, y_pred, labels=[1, 2, 3])
+    prec = precision_score(y_test, y_pred, average=None)
+    rec = recall_score(y_test, y_pred, average=None)
+    f1 = f1_score(y_test, y_pred, average=None)
+
+    model_performance.append({
+        'DogID': dog_id,
+        'Accuracy_Score': ac,
+        'Confusion_Matrix': cm,
+        'Precision_Score': prec,
+        'Recall_Score': rec,
+        'F1_Score': f1
+    })
+
+# Dataframe de resultados dos modelos
+df_model_performance = pd.DataFrame(model_performance)
+# Extrando as métricas para cada classe
+precision_scores = np.array([score for scores in df_model_performance['Precision_Score'] for score in scores])
+recall_scores = np.array([score for scores in df_model_performance['Recall_Score'] for score in scores])
+f1_scores = np.array([score for scores in df_model_performance['F1_Score'] for score in scores])
+
+# Agrupando os resultados por classe
+precision_by_class = [precision_scores[i::3] for i in range(3)]
+recall_by_class = [recall_scores[i::3] for i in range(3)]
+f1_by_class = [f1_scores[i::3] for i in range(3)]
+
+# Criar boxplots
+labels = ['Galloping (1)', 'Standing (2)', 'Walking (3)']
+metrics = [precision_by_class, recall_by_class, f1_by_class]
+metric_names = ['Precisão', 'Recall', 'F1 Score']
+
+plt.figure(figsize=(15, 12))
+
+for i, metric in enumerate(metrics):
+    plt.subplot(3, 1, i + 1)
+
+    plt.boxplot(metric, vert=True, patch_artist=True)
+    plt.title(f'Distribuição de {metric_names[i]} por Classe')
+    plt.ylabel(metric_names[i])
+    plt.xticks([1, 2, 3], labels)
+
+plt.tight_layout()
+plt.show()
+!pip install graphviz
+!pip install pydotplus
+# Representação da árvore do último modelo gerado
+from sklearn.tree import export_graphviz
+from six import StringIO
+from IPython.display import Image
+import pydotplus
+
+dot_data = StringIO()
+feature_cols = ['Energy_A', 'Energy_G', 'Peak_A', 'Peak_G', 'Cross_Mean_A', 'Cross_Mean_G']
+export_graphviz(clf, out_file=dot_data, filled=True, rounded=True, special_characters=True,feature_names = feature_cols, max_depth=5, class_names=['1','2','3'])
+graph = pydotplus.graph_from_dot_data(dot_data.getvalue())
+graph.write_png('behavior.png')
+Image(graph.create_png())
